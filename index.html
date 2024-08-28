@@ -1,0 +1,347 @@
+<script type='module'>
+
+const baseUrl = "https://api.kakomimasu.com";
+
+async function createGame()
+{
+	const url = `${baseUrl}/v1/matches/c223a631-77af-4c7c-847e-9191ea6d8141/players`;
+	const payload = {
+		guestName: "📃HTMLくん",
+		aiName: "a1",
+		boardName: "A-1",
+		nAgent: 1
+	};
+	const init = {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify(payload)
+	};
+	const response = await fetch(url, init);
+	return response.json();
+}
+
+async function waitRedNinja(gameId)
+{
+	while (true)
+	{
+		const url = `${baseUrl}/v1/matches/${gameId}`;
+		const response = await fetch(url);
+		const game = await response.json();
+		
+		if (game.startedAtUnixTime)
+		{
+			return game;
+		}
+		await new Promise(r => setTimeout(r, 100));
+	}
+}
+
+async function wait200(gameId)
+{
+	while (true)
+	{
+		const url = `${baseUrl}/v1/matches/${gameId}`;
+		const response = await fetch(url);
+		const statusCode = response.status;
+		if (statusCode === 200)
+		{
+			return response.json();
+		}
+		await new Promise(r => setTimeout(r, 100));
+	}
+}
+
+function createState(game, index)
+{
+	const agent = game.players[index].agents[0];
+	const width = game.field.width;
+	const height = game.field.height;
+	const endTurn = game.totalTurn;
+	const state = new State(width, height, endTurn);
+
+	state.turn = game.turn;
+	state.character.x = agent.x;
+	state.character.y = agent.y;
+
+	const points = game.field.points;
+	const tiles = game.field.tiles;
+	state.enemyTiles = Array.from({ length: state.h }, () => Array(state.w).fill(false));
+
+	for (let y = 0; y < state.h; y++)
+	{
+		for (let x = 0; x < state.w; x++)
+		{
+			const idx = state.w * y + x;
+			const tile = tiles[idx];
+			const type = tile.type;
+			const player = tile.player;
+			const point = points[idx];
+			let newPoint = 0;
+
+			if (!(type === 1 && player === index))
+			{
+				newPoint = point;
+			}
+
+			state.enemyTiles[y][x] = type === 1 && player === (index === 0 ? 1 : 0);
+			state.points[y][x] = newPoint;
+		}
+	}
+	return state;
+}
+
+function doBeamSearch(state)
+{
+	let bestdx = 0;
+	let bestdy = 0;
+
+	const startTime = Date.now();
+	
+	if (state.character.x !== -1)
+	{
+		const beamWidth = 100;
+		const beamDepth = 10;
+		
+		let nowBeam = [];
+		nowBeam.push(state);
+		let bestState = null;
+
+		for (let t = 0; t < beamDepth; t++)
+		{
+			let nextBeam = [];
+
+			for (let i = 0; i < beamWidth; i++)
+			{
+				if (nowBeam.length === 0) break;
+
+				const nowState = nowBeam.shift();
+				const legalActions = nowState.legalActions();
+
+				legalActions.forEach(action =>
+				{
+					const nextState = nowState.clone();
+					nextState.advance(action);
+					nextState.evaluateScore();
+					if (t === 0)
+					{
+						nextState.firstAction = action;
+					}
+					nextBeam.push(nextState);
+				});
+			}
+			nowBeam = nextBeam.slice().sort((a, b) => b.evaluatedScore - a.evaluatedScore);
+			bestState = nowBeam[0];
+			if (bestState.isDone()) break;
+		}
+		bestdx = State.dx[bestState.firstAction];
+		bestdy = State.dy[bestState.firstAction];
+	}
+	console.log('thinking time', Date.now() - startTime);
+	
+	return [bestdx, bestdy];
+}
+
+async function sendActions(gameId, pic, actions)
+{
+	const payload = {
+		actions: actions
+	};
+	const url = `${baseUrl}/v1/matches/${gameId}/actions`;
+	const init = {
+		method: 'PATCH',
+		headers: {
+			'Content-Type': 'application/json',
+			'Authorization': pic
+		},
+		body: JSON.stringify(payload)
+	};
+	await fetch(url, init);
+}
+
+async function getTimeLag(response)
+{
+	const clientTime = Date.now();
+	const serverTime = new Date(response.headers.get('date')).getTime();
+	const timeLag = clientTime - serverTime;
+	console.log('timeLag', timeLag);
+	return timeLag;
+}
+
+async function start()
+{
+	const versionResponse = await fetch('https://api.kakomimasu.com/version');
+	const timeLag = await getTimeLag(versionResponse);
+	
+	let game = await createGame();
+	const gameId = game.gameId;
+	const pic = game.pic;
+	const index = game.index;
+
+	game = await waitRedNinja(gameId);
+
+	const start = game.startedAtUnixTime * 1000 + timeLag;
+	const opsec = game.operationSec * 1000;
+	const trsec = game.transitionSec * 1000;
+
+	const startSleepTime = Math.max(start - Date.now(), 0);
+	await new Promise(r => setTimeout(r, startSleepTime));
+	
+	let lnx = -1;
+	let lny = -1;
+
+	while (true)
+	{
+		const game = await wait200(gameId);
+		const status = game.status;
+
+		if (status === "ended") break;
+
+		const state = createState(game, index);
+		state.print();
+
+		const [bestdx, bestdy] = doBeamSearch(state);
+
+		let action1 = null;
+
+		if (state.character.x === -1)
+		{
+			action1 = {
+				agentId: 0,
+				type: "PUT",
+				x: Math.floor(Math.random() * state.w),
+				y: Math.floor(Math.random() * state.h)
+			};
+		}
+		else
+		{
+			let nx = state.character.x + bestdx;
+			let ny = state.character.y + bestdy;
+
+			if (nx === lnx && ny === lny)
+			{
+				console.log("Random Kaihi");
+				nx = state.character.x + (Math.random() < 0.5 ? 1 : -1);
+				ny = state.character.y + (Math.random() < 0.5 ? 1 : -1);
+			}
+			const type = state.enemyTiles[ny][nx] ? "REMOVE" : "MOVE";
+			action1 = {
+				agentId: 0,
+				type: type,
+				x: nx,
+				y: ny
+			};
+			lnx = nx;
+			lny = ny;
+		}
+
+		if (action1)
+		{
+			await sendActions(gameId, pic, [action1]);
+		}
+
+		const sleepTime = Math.max(start + (opsec + trsec) * state.turn - Date.now(), 0);
+		await new Promise(r => setTimeout(r, sleepTime));
+	}
+}
+
+class Coord {
+	constructor(y, x)
+	{
+		this.y = y;
+		this.x = x;
+	}
+
+	toString()
+	{
+		return `(${this.x}, ${this.y})`;
+	}
+}
+
+class State
+{
+	static dx = [1, -1, 0, 0];
+	static dy = [0, 0, 1, -1];
+
+	constructor(h, w, endTurn)
+	{
+		this.h = h;
+		this.w = w;
+		this.END_TURN = endTurn;
+		this.points = Array.from({ length: h }, () => Array(w).fill(0));
+		this.turn = 0;
+		this.character = new Coord(0, 0);
+		this.gameScore = 0;
+		this.evaluatedScore = 0;
+		this.firstAction = -1;
+		this.enemyTiles = Array.from({ length: h }, () => Array(w).fill(false));
+	}
+
+	isDone()
+	{
+		return this.turn === this.END_TURN;
+	}
+
+	evaluateScore()
+	{
+		this.evaluatedScore = this.gameScore;
+	}
+
+	advance(action)
+	{
+		this.character.x += State.dx[action];
+		this.character.y += State.dy[action];
+		const point = this.points[this.character.y][this.character.x];
+		if (point > 0)
+		{
+			this.gameScore += point;
+			this.points[this.character.y][this.character.x] = 0;
+		}
+		this.turn++;
+	}
+
+	legalActions()
+	{
+		const actions = [];
+		for (let action = 0; action < 4; action++)
+		{
+			const ty = this.character.y + State.dy[action];
+			const tx = this.character.x + State.dx[action];
+			if (ty >= 0 && ty < this.h && tx >= 0 && tx < this.w)
+			{
+				actions.push(action);
+			}
+		}
+		return actions;
+	}
+
+	clone()
+	{
+		const nextState = new State(this.h, this.w, this.END_TURN);
+		nextState.character = new Coord(this.character.y, this.character.x);
+		nextState.points = this.points.map(row => [...row]);
+		nextState.turn = this.turn;
+		nextState.gameScore = this.gameScore;
+		nextState.firstAction = this.firstAction;
+		nextState.evaluatedScore = this.evaluatedScore;
+		nextState.enemyTiles = this.enemyTiles.map(row => [...row]);
+		return nextState;
+	}
+
+	print()
+	{
+		console.log("turn: " + this.turn);
+		// for (let y = 0; y < this.h; y++) {
+		//	 let ss = '';
+		//	 for (let x = 0; x < this.w; x++) {
+		//		 ss += this.points[y][x].toString().padStart(3, ' ');
+		//	 }
+		//	 console.log(ss);
+		// }
+	}
+}
+
+await start();
+
+</script>
