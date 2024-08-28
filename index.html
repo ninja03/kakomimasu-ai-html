@@ -4,7 +4,8 @@ const baseUrl = "https://api.kakomimasu.com";
 
 async function createGame()
 {
-	const url = `${baseUrl}/v1/matches/c223a631-77af-4c7c-847e-9191ea6d8141/players`;
+	const url = `${baseUrl}/v1/matches/9892966f-9f60-40ec-9030-1b2bc465ac7d/players`;
+	// const url = `${baseUrl}/v1/matches/ai/players`;
 	const payload = {
 		guestName: "📃HTMLくん",
 		aiName: "a1",
@@ -85,15 +86,14 @@ function createState(game, index)
 				newPoint = point;
 			}
 
-			state.enemyTiles[y][x] = type === 1 && player === (index === 0 ? 1 : 0);
+			state.enemyTiles[y][x] = type === 1 && player !== index;
 			state.points[y][x] = newPoint;
 		}
 	}
 	return state;
 }
 
-function doBeamSearch(state)
-{
+function doBeamSearch(state) {
 	let bestdx = 0;
 	let bestdy = 0;
 
@@ -101,7 +101,7 @@ function doBeamSearch(state)
 	
 	if (state.character.x !== -1)
 	{
-		const beamWidth = 100;
+		const beamWidth = 1000;
 		const beamDepth = 10;
 		
 		let nowBeam = [];
