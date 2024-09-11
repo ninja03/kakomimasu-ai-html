@@ -1,16 +1,15 @@
 <script type='module'>
 
 const baseUrl = "https://api.kakomimasu.com";
+const url = `${baseUrl}/v1/matches/a4816a43-b585-4fca-82f8-14f2c7fa478d/players`;
+// const url = `${baseUrl}/v1/matches/ai/players`;
 
-async function createGame()
-{
-	const url = `${baseUrl}/v1/matches/9892966f-9f60-40ec-9030-1b2bc465ac7d/players`;
-	// const url = `${baseUrl}/v1/matches/ai/players`;
+const createGame = async () => {
 	const payload = {
 		guestName: "📃HTMLくん",
 		aiName: "a1",
 		boardName: "A-1",
-		nAgent: 1
+		nAgent: 2
 	};
 	const init = {
 		method: 'POST',
@@ -21,59 +20,57 @@ async function createGame()
 	};
 	const response = await fetch(url, init);
 	return response.json();
-}
+};
 
-async function waitRedNinja(gameId)
-{
-	while (true)
-	{
+const waitRedNinja = async (gameId) => {
+	while (true) {
 		const url = `${baseUrl}/v1/matches/${gameId}`;
 		const response = await fetch(url);
 		const game = await response.json();
 		
-		if (game.startedAtUnixTime)
-		{
+		if (game.startedAtUnixTime) {
 			return game;
 		}
 		await new Promise(r => setTimeout(r, 100));
 	}
-}
+};
 
-async function wait200(gameId)
-{
-	while (true)
-	{
+const wait200 = async (gameId) => {
+	while (true) {
 		const url = `${baseUrl}/v1/matches/${gameId}`;
 		const response = await fetch(url);
 		const statusCode = response.status;
-		if (statusCode === 200)
-		{
+		if (statusCode === 200) {
 			return response.json();
 		}
 		await new Promise(r => setTimeout(r, 100));
 	}
-}
+};
 
-function createState(game, index)
-{
-	const agent = game.players[index].agents[0];
+const createState = (game, index) => {
+	console.log(game);
 	const width = game.field.width;
 	const height = game.field.height;
 	const endTurn = game.totalTurn;
-	const state = new State(width, height, endTurn);
+	const agentNum = game.players[index].agents.length;
+	const state = new State(width, height, endTurn, agentNum);
+	console.log("agentNum", agentNum);
 
 	state.turn = game.turn;
-	state.character.x = agent.x;
-	state.character.y = agent.y;
+	for (let i = 0; i < agentNum; i++) {
+		const agent = game.players[index].agents[i];
+		console.log("agent " + i, agent);
+		state.characters[i].x = agent.x;
+		state.characters[i].y = agent.y;
+		console.log("ok!");
+	}
 
 	const points = game.field.points;
 	const tiles = game.field.tiles;
 	state.enemyTiles = Array.from({ length: state.h }, () => Array(state.w).fill(false));
 
-	for (let y = 0; y < state.h; y++)
-	{
-		for (let x = 0; x < state.w; x++)
-		{
+	for (let y = 0; y < state.h; y++) {
+		for (let x = 0; x < state.w; x++) {
 			const idx = state.w * y + x;
 			const tile = tiles[idx];
 			const type = tile.type;
@@ -81,8 +78,7 @@ function createState(game, index)
 			const point = points[idx];
 			let newPoint = 0;
 
-			if (!(type === 1 && player === index))
-			{
+			if (!(type === 1 && player === index)) {
 				newPoint = point;
 			}
 
@@ -91,38 +87,34 @@ function createState(game, index)
 		}
 	}
 	return state;
-}
+};
 
-function doBeamSearch(state) {
+const doBeamSearch = (state, cidx) => {
 	let bestdx = 0;
 	let bestdy = 0;
 
 	const startTime = Date.now();
 	
-	if (state.character.x !== -1)
-	{
-		const beamWidth = 1000;
-		const beamDepth = 10;
+	if (state.characters[cidx].x !== -1) {
+		const beamWidth = 10;
+		const beamDepth = 1;
 		
 		let nowBeam = [];
 		nowBeam.push(state);
 		let bestState = null;
 
-		for (let t = 0; t < beamDepth; t++)
-		{
-			let nextBeam = [];
+		for (let t = 0; t < beamDepth; t++) {
+			const nextBeam = [];
 
-			for (let i = 0; i < beamWidth; i++)
-			{
+			for (let i = 0; i < beamWidth; i++) {
 				if (nowBeam.length === 0) break;
 
 				const nowState = nowBeam.shift();
-				const legalActions = nowState.legalActions();
+				const legalActions = nowState.legalActions(cidx);
 
-				legalActions.forEach(action =>
-				{
+				legalActions.forEach(action => {
 					const nextState = nowState.clone();
-					nextState.advance(action);
+					nextState.advance(cidx, action);
 					nextState.evaluateScore();
 					if (t === 0)
 					{
@@ -143,8 +135,7 @@ function doBeamSearch(state) {
 	return [bestdx, bestdy];
 }
 
-async function sendActions(gameId, pic, actions)
-{
+const sendActions = async(gameId, pic, actions) => {
 	const payload = {
 		actions: actions
 	};
@@ -158,19 +149,17 @@ async function sendActions(gameId, pic, actions)
 		body: JSON.stringify(payload)
 	};
 	await fetch(url, init);
-}
+};
 
-async function getTimeLag(response)
-{
+const getTimeLag = async (response) => {
 	const clientTime = Date.now();
 	const serverTime = new Date(response.headers.get('date')).getTime();
 	const timeLag = clientTime - serverTime;
 	console.log('timeLag', timeLag);
 	return timeLag;
-}
+};
 
-async function start()
-{
+const start = async () => {
 	const versionResponse = await fetch('https://api.kakomimasu.com/version');
 	const timeLag = await getTimeLag(versionResponse);
 	
@@ -188,11 +177,10 @@ async function start()
 	const startSleepTime = Math.max(start - Date.now(), 0);
 	await new Promise(r => setTimeout(r, startSleepTime));
 	
-	let lnx = -1;
-	let lny = -1;
+	let lnx = [-1, -1];
+	let lny = [-1, -1];
 
-	while (true)
-	{
+	while (true) {
 		const game = await wait200(gameId);
 		const status = game.status;
 
@@ -201,45 +189,40 @@ async function start()
 		const state = createState(game, index);
 		state.print();
 
-		const [bestdx, bestdy] = doBeamSearch(state);
+		const actions = [];
+		for (let cidx = 0; cidx < 2; cidx++) {
+			const [bestdx, bestdy] = doBeamSearch(state, cidx);
 
-		let action1 = null;
+			if (state.characters[cidx].x === -1) {
+				actions.push({
+					agentId: cidx,
+					type: "PUT",
+					x: Math.floor(Math.random() * state.w),
+					y: Math.floor(Math.random() * state.h)
+				});
+			} else {
+				let nx = state.characters[cidx].x + bestdx;
+				let ny = state.characters[cidx].y + bestdy;
 
-		if (state.character.x === -1)
-		{
-			action1 = {
-				agentId: 0,
-				type: "PUT",
-				x: Math.floor(Math.random() * state.w),
-				y: Math.floor(Math.random() * state.h)
-			};
-		}
-		else
-		{
-			let nx = state.character.x + bestdx;
-			let ny = state.character.y + bestdy;
-
-			if (nx === lnx && ny === lny)
-			{
-				console.log("Random Kaihi");
-				nx = state.character.x + (Math.random() < 0.5 ? 1 : -1);
-				ny = state.character.y + (Math.random() < 0.5 ? 1 : -1);
+				if (nx === lnx[cidx] && ny === lny[cidx]) {
+					console.log("Random Kaihi");
+					nx = state.characters[cidx].x + (Math.random() < 0.5 ? 1 : -1);
+					ny = state.characters[cidx].y + (Math.random() < 0.5 ? 1 : -1);
+				}
+				const type = state.enemyTiles[ny][nx] ? "REMOVE" : "MOVE";
+				console.log("state.enemyTiles", state.enemyTiles);
+				actions.push({
+					agentId: cidx,
+					type: type,
+					x: nx,
+					y: ny
+				});
+				lnx[cidx] = nx;
+				lny[cidx] = ny;
 			}
-			const type = state.enemyTiles[ny][nx] ? "REMOVE" : "MOVE";
-			action1 = {
-				agentId: 0,
-				type: type,
-				x: nx,
-				y: ny
-			};
-			lnx = nx;
-			lny = ny;
 		}
-
-		if (action1)
-		{
-			await sendActions(gameId, pic, [action1]);
-		}
+		console.log("actions", actions);
+		await sendActions(gameId, pic, actions);
 
 		const sleepTime = Math.max(start + (opsec + trsec) * state.turn - Date.now(), 0);
 		await new Promise(r => setTimeout(r, sleepTime));
@@ -247,79 +230,74 @@ async function start()
 }
 
 class Coord {
-	constructor(y, x)
-	{
+	constructor(y, x) {
 		this.y = y;
 		this.x = x;
 	}
 
-	toString()
-	{
+	toString() {
 		return `(${this.x}, ${this.y})`;
 	}
 }
 
-class State
-{
+class State {
 	static dx = [1, -1, 0, 0];
 	static dy = [0, 0, 1, -1];
 
-	constructor(h, w, endTurn)
-	{
+	constructor(h, w, endTurn, agentNum) {
 		this.h = h;
 		this.w = w;
 		this.END_TURN = endTurn;
 		this.points = Array.from({ length: h }, () => Array(w).fill(0));
 		this.turn = 0;
-		this.character = new Coord(0, 0);
+		this.characters = [];
+		for (let i = 0; i < agentNum; i++) {
+			this.characters.push(new Coord(0, 0));
+		}
 		this.gameScore = 0;
 		this.evaluatedScore = 0;
 		this.firstAction = -1;
 		this.enemyTiles = Array.from({ length: h }, () => Array(w).fill(false));
 	}
 
-	isDone()
-	{
+	isDone() {
 		return this.turn === this.END_TURN;
 	}
 
-	evaluateScore()
-	{
+	evaluateScore() {
 		this.evaluatedScore = this.gameScore;
 	}
 
-	advance(action)
-	{
-		this.character.x += State.dx[action];
-		this.character.y += State.dy[action];
-		const point = this.points[this.character.y][this.character.x];
-		if (point > 0)
-		{
+	advance(cidx, action) {
+		this.characters[cidx].x += State.dx[action];
+		this.characters[cidx].y += State.dy[action];
+		const point = this.points[this.characters[cidx].y][this.characters[cidx].x];
+		if (point > 0) {
 			this.gameScore += point;
-			this.points[this.character.y][this.character.x] = 0;
+			this.points[this.characters[cidx].y][this.characters[cidx].x] = 0;
 		}
 		this.turn++;
 	}
 
-	legalActions()
-	{
+	legalActions(cidx) {
 		const actions = [];
-		for (let action = 0; action < 4; action++)
-		{
-			const ty = this.character.y + State.dy[action];
-			const tx = this.character.x + State.dx[action];
-			if (ty >= 0 && ty < this.h && tx >= 0 && tx < this.w)
-			{
+		for (let action = 0; action < 4; action++) {
+			const ty = this.characters[cidx].y + State.dy[action];
+			const tx = this.characters[cidx].x + State.dx[action];
+			if (ty >= 0 && ty < this.h && tx >= 0 && tx < this.w) {
 				actions.push(action);
 			}
 		}
 		return actions;
 	}
 
-	clone()
-	{
-		const nextState = new State(this.h, this.w, this.END_TURN);
-		nextState.character = new Coord(this.character.y, this.character.x);
+	clone() {
+		const nextState = new State(this.h, this.w, this.END_TURN, this.characters.length);
+		nextState.characters = [];
+		for (let i = 0; i < this.characters.length; i++) {
+			const c = new Coord(this.characters[i].y, this.characters[i].x);
+			nextState.characters.push(c);
+		}
 		nextState.points = this.points.map(row => [...row]);
 		nextState.turn = this.turn;
 		nextState.gameScore = this.gameScore;
@@ -329,8 +307,7 @@ class State
 		return nextState;
 	}
 
-	print()
-	{
+	print() {
 		console.log("turn: " + this.turn);
 		// for (let y = 0; y < this.h; y++) {
 		//	 let ss = '';
